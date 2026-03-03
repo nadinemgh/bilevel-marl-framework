@@ -156,6 +156,7 @@ def mechanism_to_unit_vector(params: MechanismParameters) -> np.ndarray:
         ],
         dtype=np.float32,
     )
+<<<<<<<< HEAD:legacy_code/mechanism.py
 
 
 from core.world.context import ContextSchema
@@ -188,3 +189,5 @@ class MechanismContext(ContextSchema):
             fine_amount=self.fine_amount,
             ban_period=self.ban_period,
         )
+========
+>>>>>>>> origin/master:src/contexts/mechanism.py

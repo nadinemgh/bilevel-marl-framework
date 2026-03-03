@@ -8,9 +8,17 @@ with regulatory mechanisms including quotas, fines, and temporary bans.
 from typing import Dict, Optional, Tuple
 
 import numpy as np
+from config import (
+    ACTION_BOUNDS,
+    DEFAULT_ECOLOGY_CONFIG,
+    DEFAULT_MECHANISM_CONFIG,
+    EPS,
+    OBSERVATION_BOUNDS,
+)
 from gymnasium import spaces
 from ray.rllib.env.multi_agent_env import MultiAgentEnv
 
+<<<<<<<< HEAD:legacy_code/environment.py
 from legacy_code.config import (
     ACTION_BOUNDS,
     DEFAULT_ECOLOGY_CONFIG,
@@ -19,6 +27,8 @@ from legacy_code.config import (
     OBSERVATION_BOUNDS,
 )
 
+========
+>>>>>>>> origin/master:src/envs/environment.py
 
 class FisheryEnvFixed(MultiAgentEnv):
     """Multi-agent fishery environment with Lotka-Volterra ecosystem dynamics.

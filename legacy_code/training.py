@@ -6,14 +6,23 @@ for the multi-agent fishery environment.
 
 from typing import Tuple
 
+<<<<<<<< HEAD:legacy_code/training.py
+========
+from config import PPO_CONFIG
+from environment import FisheryEnvFixed
+from mechanism import MechanismParameters
+>>>>>>>> origin/master:src/optimizers/ppo/training.py
 from ray import init as ray_init
 from ray import shutdown as ray_shutdown
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.tune.registry import register_env
+<<<<<<<< HEAD:legacy_code/training.py
 
 from legacy_code.mechanism import MechanismParameters
 from legacy_code.environment import FisheryEnvFixed
 from legacy_code.config import PPO_CONFIG
+========
+>>>>>>>> origin/master:src/optimizers/ppo/training.py
 
 
 def initialize_ray(logging_level: str = "ERROR") -> None:
