@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import copy
-from abc import ABC, abstractmethod
+from abc import ABC
 from typing import TYPE_CHECKING, Optional, Self, Type, Union
 
-from core.types import EnvType
+import ray
+from gymnasium import Space
+from ray.rllib.utils.metrics.metrics_logger import DEFAULT_STATS_CLS_LOOKUP
+
+from core.envs.base import BaseEnv
+from core.types import EnvConfigDict, EnvType
 from core.world.base import World
 
 if TYPE_CHECKING:
@@ -30,14 +35,23 @@ class OptimizerConfig(_Config, ABC):
         """
         self.opt_class = opt_class
 
-        # World specs
-        self._world: Optional[World] = None
-
-        # Has this config object been frozen (cannot alter its attributes anymore).
+        # -- lifecycle --
         self._is_frozen = False
 
-        # Evaluation
+        # --- world / environment ---
+        self.env: Optional[Union[str, EnvType]] = None
+        self.env_config: dict = {}
+        self.horizon: int = None  # TODO default value
+
+        # --- training ---
+        self.seed: int = None
+
+        # --- eval ---
         self.evaluation_config: Optional["OptimizerConfig"] = None
+
+        # TODO
+        # --- reporting ---
+        self.stats_cls_lookup = DEFAULT_STATS_CLS_LOOKUP
 
     def __setattr__(self, name, value):
         if hasattr(self, "_is_frozen") and self._is_frozen:
@@ -47,6 +61,25 @@ class OptimizerConfig(_Config, ABC):
                     "OptimizerConfig!"
                 )
         super().__setattr__(name, value)
+
+    # TODO generalize this function
+    def _merge_env_config(self, extra: dict) -> Self:
+        self.env_config = {
+            **(self.env_config or {}),
+            **extra,
+        }
+        return self
+
+    # TODO freezing for nested configs
+    def freeze(self) -> None:
+        """Freeze this config object, such that no attributes can be set anymore.
+
+        Optimizers should use this method to make sure their config objects
+        remain read-only after this.
+        """
+        if self._is_frozen:
+            return
+        self._is_frozen = True
 
     def copy(self, copy_frozen: Optional[bool] = None) -> Self:
         """Creates a deep copy of this config and (un)freezes if necessary.
@@ -67,124 +100,179 @@ class OptimizerConfig(_Config, ABC):
                 cp.evaluation_config._is_frozen = False
         return cp
 
-    # TODO freezing for nested configs
-    def freeze(self) -> None:
-        """Freeze this config object, such that no attributes can be set anymore.
+    # TODO review this
+    @classmethod
+    def from_dict(cls, data: dict) -> Self:
+        """Serialization from dict"""
+        cfg = cls()
+        for k, v in data.items():
+            if hasattr(cfg, k):
+                setattr(cfg, k, v)
+        return cfg
 
-        Optimizers should use this method to make sure their config objects
-        remain read-only after this.
-        """
-        if self._is_frozen:
-            return
-        self._is_frozen = True
+    # TODO review this
+    @classmethod
+    def from_yaml(cls, path: str) -> Self:
+        """Serialization from yaml"""
+        import yaml
+
+        with open(path, "r") as f:
+            data = yaml.safe_load(f)
+        return cls.from_dict(data)
+
+    def _env_creator(
+        self,
+        **env_ctx,
+    ) -> BaseEnv:
+        return self.env(**env_ctx)
 
     # TODO deep copy allows on may be toggled later with use_copy
     # TODO build_optimizer() to accept logger_creator: Optional[Callable[[], Logger]] = None,
     # TODO move optimizer registration to executor in future
     # TODO enable multiple world registration
-    def build_optimizer(self) -> Optimizer:
-        """Builds an Optimizer from this OptimizerConfig (or a copy thereof).
+    def build_optimizer(
+        self,
+        *,
+        world: Optional[World] = None,
+        inner_opt: Optional[Optimizer] = None,
+        **kwargs,
+    ) -> Optimizer:
+        """Builds an Optimizer from this OptimizerConfig (or a copy thereof)."""
+        cfg = self.copy(copy_frozen=True)
+        if cfg.opt_class is None:
+            raise ValueError("OptimizerConfig has no opt_class")
+
+        # TODO remove this in the future and create registry for world and optimizer. keep for now as safety guard
+        opt = cfg.opt_class(config=cfg)
+
+        # register optimizer in world to link contexts to optimizers
+        if world is not None:
+            opt_id = ray.get(world.register_optimizer.remote(opt))
+            opt.set_id(opt_id)
+
+        env = cfg._env_creator(
+            world=world, opt_id=opt_id, optimizer=inner_opt, **self.env_config
+        )
+        opt.env = env
+
+        return opt
+
+    # TODO EnvConfigDict
+    def environment(
+        self,
+        env: Optional[Union[str, EnvType]] = None,
+        train_iters: Optional[int] = None,
+        horizon: Optional[int] = None,
+        *,
+        env_config: Optional[EnvConfigDict] = None,
+        observation_space: Optional[Space] = None,
+        action_space: Optional[Space] = None,
+        disable_env_checking: Optional[bool] = None,
+    ):
+        """Sets the config's RL-environment settings.
 
         Args:
-            world: Name of the world (gymnasium Env type) #review
-            logger_creator: Callable that creates a logger object. If unspecified, a default logger is created.
+            env: The environment specifier. This can either be a tune-registered env,
+                via `tune.register_env([name], lambda env_ctx: [env object])`,
+                or a string specifier of an RLlib supported type. In the latter case,
+                RLlib tries to interpret the specifier as either an Farama-Foundation
+                gymnasium env, a PyBullet env, or a fully qualified classpath to an Env
+                class, e.g. "ray.rllib.examples.envs.classes.random_env.RandomEnv".
+            env_config: Arguments dict passed to the env creator as an EnvContext
+                object (which is a dict plus the properties: `num_env_runners`,
+                `worker_index`, `vector_index`, and `remote`).
+            observation_space: The observation space for the Policies of this Algorithm.
+            action_space: The action space for the Policies of this Algorithm.
+            horizon: Rollout steps taken by the environment before termination.
+            render_env: If True, try to render the environment on the local worker or on
+                worker 1 (if num_env_runners > 0). For vectorized envs, this usually
+                means that only the first sub-environment is rendered.
+                In order for this to work, your env has to implement the
+                `render()` method which either:
+                a) handles window generation and rendering itself (returning True) or
+                b) returns a numpy uint8 image of shape [height x width x 3 (RGB)].
+            clip_rewards: Whether to clip rewards during Policy's postprocessing.
+                None (default): Clip for Atari only (r=sign(r)).
+                True: r=sign(r): Fixed rewards -1.0, 1.0, or 0.0.
+                False: Never clip.
+                [float value]: Clip at -value and + value.
+                Tuple[value1, value2]: Clip at value1 and value2.
+            normalize_actions: If True, RLlib learns entirely inside a normalized
+                action space (0.0 centered with small stddev; only affecting Box
+                components). RLlib unsquashes actions (and clip, just in case) to the
+                bounds of the env's action space before sending actions back to the env.
+            clip_actions: If True, the RLlib default ModuleToEnv connector clips
+                actions according to the env's bounds (before sending them into the
+                `env.step()` call).
+            disable_env_checking: Disable RLlib's env checks after a gymnasium.Env
+                instance has been constructed in an EnvRunner. Note that the checks
+                include an `env.reset()` and `env.step()` (with a random action), which
+                might tinker with your env's logic and behavior and thus negatively
+                influence sample collection- and/or learning behavior.
+            is_atari: This config can be used to explicitly specify whether the env is
+                an Atari env or not. If not specified, RLlib tries to auto-detect
+                this.
+            action_mask_key: If observation is a dictionary, expect the value by
+                the key `action_mask_key` to contain a valid actions mask (`numpy.int8`
+                array of zeros and ones). Defaults to "action_mask".
 
+        Returns:
+            This updated AlgorithmConfig object.
         """
-        # TODO Executer to enforce guardrails
-        # if world is None:
-        #     raise ValueError("Optimizer requires a World instance")
+        self.env_config: dict = {}
+        if env is not None:
+            self.env = env
+        if train_iters is not None:
+            self.env_config.update({"train_iters": train_iters})
+        if observation_space is not None:
+            self.env_config.update({"observation_space": observation_space})
+        if action_space is not None:
+            self.env_config.update({"action_space": action_space})
+        if horizon is not None:
+            self.env_config.update({"horizon": horizon})
+        if env_config is not None:
+            self.env_config.update(env_config)
+        if disable_env_checking is not None:
+            self.disable_env_checking = disable_env_checking
 
-        cfg = self.copy()
+        return self
 
-        # TODO : world is passed to optimizer, but also stored in config. must only have one source of truth
-        # if world is not None:
-        #     cfg._world = world
+    def training(self, *, seed: Optional[float] = None) -> Self:
+        """
 
-        cfg.freeze()  # attention this would freeze the cfg even if the world is None !
-        opt_class = self.opt_class
-        return opt_class(config=cfg)
+        Args:
+            seed:
+        """
+        if seed is not None:
+            self.seed = seed
+        return self
 
     # TODO Docstring explanation
     # @abstractmethod
-    # def world(self, world: Optional[World] = None):
-    #     """
-    #     Docstring for world
-
-    #     :param self: Description
-    #     :param world: Description
-    #     """
+    # def ressources(self):
     #     raise NotImplementedError
 
-    # TODO
-    @abstractmethod
-    def environment(self, env: Optional[Union[str, EnvType]]):
-        """
-        Docstring for environment
+    # # TODO Docstring explanation
+    # @abstractmethod
+    # def evaluation(self):
+    #     raise NotImplementedError
 
-        :param self: Description
-        :param env: Description
-        :type env: Optional[Union[str, EnvType]]
-        """
-        raise NotImplementedError
+    # # TODO Docstring explanation
+    # @abstractmethod
+    # def reporting(self):
+    #     raise NotImplementedError
 
-    # TODO Docstring explanation
-    @abstractmethod
-    def training(self):
-        raise NotImplementedError
+    # # TODO Docstring explanation
+    # @abstractmethod
+    # def checkpointing(self):
+    #     raise NotImplementedError
 
-    # TODO Docstring explanation
-    @abstractmethod
-    def ressources(self):
-        raise NotImplementedError
+    # # TODO Docstring explanation
+    # @abstractmethod
+    # def fault_tolerance(self):
+    #     raise NotImplementedError
 
-    # TODO Docstring explanation
-    @abstractmethod
-    def evaluation(self):
-        raise NotImplementedError
-
-    # TODO Docstring explanation
-    @abstractmethod
-    def reporting(self):
-        raise NotImplementedError
-
-    # TODO Docstring explanation
-    @abstractmethod
-    def checkpointing(self):
-        raise NotImplementedError
-
-    # TODO Docstring explanation
-    @abstractmethod
-    def fault_tolerance(self):
-        raise NotImplementedError
-
-    # TODO Docstring explanation
-    @abstractmethod
-    def experimental(self):
-        raise NotImplementedError
-
-
-class BaseOptimizerConfig(OptimizerConfig):
-    def environment(self, env):
-        self._env = env
-        return self
-
-    def training(self):
-        return self
-
-    def ressources(self):
-        return self
-
-    def evaluation(self):
-        return self
-
-    def reporting(self):
-        return self
-
-    def checkpointing(self):
-        return self
-
-    def fault_tolerance(self):
-        return self
-
-    def experimental(self):
-        return self
+    # # TODO Docstring explanation
+    # @abstractmethod
+    # def experimental(self):
+    #     raise NotImplementedError

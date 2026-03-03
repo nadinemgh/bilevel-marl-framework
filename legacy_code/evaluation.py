@@ -8,8 +8,14 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+<<<<<<<< HEAD:legacy_code/evaluation.py
+
+from legacy_code.environment import FisheryEnvFixed
+from legacy_code.config import EPS
+========
 from config import EPS
 from environment import FisheryEnvFixed
+>>>>>>>> origin/master:src/contexts/evaluation.py
 
 
 @dataclass

@@ -24,23 +24,14 @@ try:
 except ImportError:
     wandb = None
 
-from config import DEFAULT_TRAINING_CONFIG, ES_CONFIG, LOGGING_CONFIG
-from evaluation import EvaluationMetrics, evaluate_mechanism_with_metrics
-from evolution_strategies import sample_es_population, update_es_parameters
-from mechanism import MechanismParameters, map_unit_vector_to_mechanism
-from training import build_ppo_algorithm, initialize_ray, shutdown_ray
-
-from utils import (
-    create_results_summary,
-    finalize_wandb_logging,
-    format_time_duration,
-    initialize_wandb_logging,
-    save_csv,
-    save_json,
-)
-from visualization import (
-    create_experiment_summary_visualization,
-    load_and_visualize_experiment,
+from examples.config import DEFAULT_TRAINING_CONFIG, ES_CONFIG, LOGGING_CONFIG
+from contexts.evaluation import EvaluationMetrics, evaluate_mechanism_with_metrics
+from legacy_code.evolution_strategies import sample_es_population, update_es_parameters
+from contexts.mechanism import MechanismParameters, map_unit_vector_to_mechanism
+from legacy_code.training import build_ppo_algorithm, initialize_ray, shutdown_ray
+from legacy_code.utils import (
+    save_csv, save_json, initialize_wandb_logging, finalize_wandb_logging,
+    create_results_summary, format_time_duration
 )
 
 
@@ -386,8 +377,7 @@ def run_bilevel_optimization(args) -> dict:
         args.log_dir = f"{args.log_dir}_{timestamp}"
 
     # Ensure the timestamped directory exists
-    from utils import ensure_directory
-
+    from legacy_code.utils import ensure_directory
     ensure_directory(args.log_dir)
 
     print(f"Experiment results will be saved to: {args.log_dir}")

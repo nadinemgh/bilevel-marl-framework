@@ -1,8 +1,21 @@
 from dataclasses import dataclass
+from enum import Enum
+from typing import Optional, SupportsFloat
 
-from pydantic import BaseModel
+from gymnasium.core import ActType, ObsType
+from pydantic import BaseModel, SkipValidation
+from ray.rllib.utils.typing import MultiAgentDict
 
+from core.mechanism.base import Mechanism
 from core.types import ContextID, OptimizerID
+
+
+class MechanismStatus(Enum):
+    published = "published"
+    assigned = "assigned"
+    train = "train"
+    eval = "eval"
+    done = "done"
 
 
 # TODO some world contexts are singletons (mutable) others are simply mutable.
@@ -11,7 +24,25 @@ from core.types import ContextID, OptimizerID
 class ContextSchema(BaseModel):
     """Base schema for shared world context."""
 
-    pass
+    model_config = {"arbitrary_types_allowed": True}
+
+
+class MechanismContext(ContextSchema):
+    index: int
+    env_id: Optional[str]
+    status: MechanismStatus
+    job: Optional[MechanismStatus]
+    mechanism: SkipValidation[Mechanism]
+    metrics: Optional[ContextSchema]
+
+
+# TODO strict type annotations rm Any
+class EnvStepContext(ContextSchema):
+    mechanism: Optional[int]
+    observation: ObsType | MultiAgentDict
+    reward: SupportsFloat | MultiAgentDict | list[float]
+    action: ActType | MultiAgentDict
+    info: dict | MultiAgentDict | None
 
 
 @dataclass
@@ -22,4 +53,6 @@ class Context:
 
     id: ContextID | None
     opt_id: OptimizerID
+    step: int
+    env: str
     payload: ContextSchema

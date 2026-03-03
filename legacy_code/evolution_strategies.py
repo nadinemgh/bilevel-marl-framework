@@ -8,7 +8,12 @@ import math
 from typing import List, Tuple
 
 import numpy as np
+<<<<<<<< HEAD:legacy_code/evolution_strategies.py
+
+from legacy_code.config import EPS, ES_CONFIG
+========
 from config import EPS, ES_CONFIG
+>>>>>>>> origin/master:src/optimizers/es/evolution_strategies.py
 
 
 class EvolutionStrategies:

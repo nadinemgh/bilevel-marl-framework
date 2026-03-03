@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 import matplotlib.pyplot as plt
 import numpy as np
 
-from utils import load_csv, load_json
+from legacy_code.utils import load_csv, load_json
 
 
 def plot_ecosystem_dynamics(
